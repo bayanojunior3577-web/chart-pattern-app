@@ -1,5 +1,6 @@
 import sys
 import json
+import tempfile
 import numpy as np
 import cv2
 import streamlit as st
@@ -14,17 +15,16 @@ except ImportError:
         def __init__(self, min_confidence=0.55):
             self.min_confidence = min_confidence
 
-        def load_and_process(self, image_bytes):
-            file_bytes = np.asarray(bytearray(image_bytes), dtype=uint8)
-            img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        def load_and_process(self, image_path):
+            img = cv2.imread(image_path)
             if img is None:
-                raise ValueError("Could not decode image.")
+                raise ValueError("Could not read image file.")
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             curve = np.mean(gray, axis=0)
             return img, curve
 
-        def recognize(self, image_bytes, top_k=5):
-            roi, curve = self.load_and_process(image_bytes)
+        def recognize(self, image_path, top_k=5):
+            roi, curve = self.load_and_process(image_path)
             return {
                 "best_pattern": {"pattern": "Double Bottom", "confidence": 0.82},
                 "patterns": [
@@ -85,10 +85,8 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Read image bytes
+    # Read image bytes for display
     image_bytes = uploaded_file.read()
-    
-    # Process image with OpenCV for preview
     file_bytes = np.frombuffer(image_bytes, np.uint8)
     image_cv = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
@@ -108,16 +106,17 @@ if uploaded_file is not None:
                 with st.spinner("Analyzing chart patterns..."):
                     detector = ChartPatternRecognizerV2(min_confidence=min_conf)
                     
-                    # Handle both path-based and bytes-based detectors gracefully
+                    # Create a temporary file on disk for OpenCV to read safely
+                    suffix = Path(uploaded_file.name).suffix or ".png"
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(image_bytes)
+                        tmp_path = tmp_file.name
+
                     try:
-                        result = detector.recognize(image_bytes, top_k=top_k)
-                    except TypeError:
-                        # Fallback if detector expects file path string
-                        temp_path = f"temp_{uploaded_file.name}"
-                        with open(temp_path, "wb") as f:
-                            f.write(image_bytes)
-                        result = detector.recognize(temp_path, top_k=top_k)
-                        Path(temp_path).unlink(missing_ok=True)
+                        result = detector.recognize(tmp_path, top_k=top_k)
+                    finally:
+                        # Clean up temp file
+                        Path(tmp_path).unlink(missing_ok=True)
 
                     st.session_state["last_result"] = result
 
@@ -137,7 +136,6 @@ if uploaded_file is not None:
             if filtered_patterns:
                 st.markdown("### Detected Patterns")
                 
-                # Selection box for patterns
                 pattern_names = [
                     f"{p.get('pattern')} ({p.get('confidence', 0):.1%}) - {p.get('direction', '').upper()}"
                     for p in filtered_patterns
@@ -146,7 +144,6 @@ if uploaded_file is not None:
                 
                 selected_p = filtered_patterns[selected_idx]
 
-                # Display Selected Pattern Details
                 st.markdown("#### Pattern Details")
                 st.markdown(f"**Pattern:** `{selected_p.get('pattern')}`")
                 st.markdown(f"**Confidence:** `{selected_p.get('confidence', 0):.1%}`")
@@ -154,7 +151,6 @@ if uploaded_file is not None:
                 st.markdown(f"**Breakout:** `{selected_p.get('breakout', 'N/A')}`")
                 st.markdown(f"**Explanation:** {selected_p.get('explanation', 'None')}")
 
-                # Key Points
                 with st.expander("📍 Key Points Coordinates"):
                     for pt in selected_p.get("points", []):
                         st.write(f"• **{pt.get('kind')}**: (X: {pt.get('x')}, Y: {pt.get('y')})")
@@ -177,4 +173,4 @@ if uploaded_file is not None:
             )
 else:
     st.info("👆 Please upload a chart image file above to begin.")
-    
+                
